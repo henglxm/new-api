@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createJSONStorage } from 'zustand/middleware'
 
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
@@ -73,11 +74,16 @@ beforeEach(() => {
   useSystemConfigStore.getState().setConfig({
     currency: { ...DEFAULT_CURRENCY_CONFIG, quotaDisplayType: 'USD' },
   })
+  // Performance metrics are administrator-only; default to an admin viewer.
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'admin', role: 10 })
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   })
 })
 afterEach(() => {
+  useAuthStore.getState().auth.setUser(null)
   queryClient.clear()
   useSystemConfigStore
     .getState()
@@ -626,6 +632,32 @@ describe('model cards', () => {
     await user.click(screen.getByRole('button', { name: 'Details' }))
     expect(onModelClick).toHaveBeenCalledWith('example-model')
   })
+
+  it.each([
+    ['an anonymous visitor', null],
+    ['an ordinary user', { id: 2, username: 'user', role: 1 }],
+  ])(
+    'does not request or show performance metrics for %s',
+    async (_label, viewer) => {
+      useAuthStore.getState().auth.setUser(viewer)
+      const request = vi.spyOn(api, 'get').mockResolvedValue({
+        data: { success: true, data: { models: [] } },
+      })
+      const onModelClick = vi.fn()
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ModelCardGrid models={[pricingModel()]} onModelClick={onModelClick} />
+        </QueryClientProvider>
+      )
+      expect(request).not.toHaveBeenCalled()
+      expect(
+        screen.queryByLabelText('Performance metrics for the last 24 hours')
+      ).not.toBeInTheDocument()
+      const user = userEvent.setup()
+      await user.click(screen.getByRole('button', { name: 'Details' }))
+      expect(onModelClick).toHaveBeenCalledWith('example-model')
+    }
+  )
 
   it('paginates the model cards and disables navigation at both boundaries', async () => {
     const request = vi.spyOn(api, 'get').mockResolvedValue({
